@@ -10,6 +10,9 @@
 (define-constant err-not-for-sale (err u105))
 (define-constant err-invalid-price (err u106))
 (define-constant err-insufficient-credits (err u107))
+(define-constant err-milestone-already-claimed (err u108))
+(define-constant err-milestone-not-reached (err u109))
+(define-constant err-insufficient-reward-pool (err u110))
 
 (define-map tree-data uint 
   {
@@ -42,6 +45,31 @@
 (define-data-var next-token-id uint u1)
 (define-data-var verification-period uint u144)
 (define-data-var next-order-id uint u1)
+(define-data-var reward-pool uint u0)
+
+(define-map milestone-rewards uint uint)
+
+(define-map tree-milestone-claims uint {
+    milestone-1: bool,
+    milestone-2: bool,
+    milestone-3: bool,
+    milestone-4: bool,
+    milestone-5: bool
+})
+
+(map-set milestone-rewards u1 u50000)
+(map-set milestone-rewards u2 u100000)
+(map-set milestone-rewards u3 u200000)
+(map-set milestone-rewards u4 u400000)
+(map-set milestone-rewards u5 u800000)
+
+(define-public (fund-reward-pool (amount uint))
+    (begin
+        (try! (stx-transfer? amount tx-sender (as-contract tx-sender)))
+        (var-set reward-pool (+ (var-get reward-pool) amount))
+        (ok true)
+    )
+)
 
 (define-public (mint-tree-nft (latitude int) (longitude int))
     (let 
@@ -57,6 +85,13 @@
             health-score: u100,
             last-verification: stacks-block-height,
             carbon-credits: u0
+        })
+        (map-set tree-milestone-claims token-id {
+            milestone-1: false,
+            milestone-2: false,
+            milestone-3: false,
+            milestone-4: false,
+            milestone-5: false
         })
         (var-set next-token-id (+ token-id u1))
         (ok token-id)
@@ -213,6 +248,78 @@
 
 (define-read-only (get-carbon-credit-order (order-id uint))
     (ok (map-get? carbon-credit-orders order-id))
+)
+
+(define-public (claim-milestone-reward (token-id uint) (milestone uint))
+    (let (
+        (tree (unwrap! (map-get? tree-data token-id) err-not-found))
+        (claims (unwrap! (map-get? tree-milestone-claims token-id) err-not-found))
+        (reward-amount (unwrap! (map-get? milestone-rewards milestone) err-not-found))
+        (tree-height (get height tree))
+    )
+        (asserts! (is-eq (get owner tree) tx-sender) err-owner-only)
+        (asserts! (<= reward-amount (var-get reward-pool)) err-insufficient-reward-pool)
+        (asserts! (>= tree-height (get-milestone-height-requirement milestone)) err-milestone-not-reached)
+        (asserts! (not (get-milestone-claim-status claims milestone)) err-milestone-already-claimed)
+        (try! (as-contract (stx-transfer? reward-amount tx-sender (get owner tree))))
+        (var-set reward-pool (- (var-get reward-pool) reward-amount))
+        (map-set tree-milestone-claims token-id (set-milestone-claim-status claims milestone))
+        (ok reward-amount)
+    )
+)
+
+(define-read-only (get-milestone-height-requirement (milestone uint))
+    (if (is-eq milestone u1) u50
+        (if (is-eq milestone u2) u150
+            (if (is-eq milestone u3) u300
+                (if (is-eq milestone u4) u500
+                    (if (is-eq milestone u5) u750
+                        u0
+                    )
+                )
+            )
+        )
+    )
+)
+
+(define-read-only (get-milestone-claim-status (claims {milestone-1: bool, milestone-2: bool, milestone-3: bool, milestone-4: bool, milestone-5: bool}) (milestone uint))
+    (if (is-eq milestone u1) (get milestone-1 claims)
+        (if (is-eq milestone u2) (get milestone-2 claims)
+            (if (is-eq milestone u3) (get milestone-3 claims)
+                (if (is-eq milestone u4) (get milestone-4 claims)
+                    (if (is-eq milestone u5) (get milestone-5 claims)
+                        false
+                    )
+                )
+            )
+        )
+    )
+)
+
+(define-private (set-milestone-claim-status (claims {milestone-1: bool, milestone-2: bool, milestone-3: bool, milestone-4: bool, milestone-5: bool}) (milestone uint))
+    (if (is-eq milestone u1) (merge claims {milestone-1: true})
+        (if (is-eq milestone u2) (merge claims {milestone-2: true})
+            (if (is-eq milestone u3) (merge claims {milestone-3: true})
+                (if (is-eq milestone u4) (merge claims {milestone-4: true})
+                    (if (is-eq milestone u5) (merge claims {milestone-5: true})
+                        claims
+                    )
+                )
+            )
+        )
+    )
+)
+
+(define-read-only (get-tree-milestone-claims (token-id uint))
+    (ok (map-get? tree-milestone-claims token-id))
+)
+
+(define-read-only (get-reward-pool-balance)
+    (ok (var-get reward-pool))
+)
+
+(define-read-only (get-milestone-reward-amount (milestone uint))
+    (ok (map-get? milestone-rewards milestone))
 )
 
 (define-private (calculate-carbon-credits (height uint))
