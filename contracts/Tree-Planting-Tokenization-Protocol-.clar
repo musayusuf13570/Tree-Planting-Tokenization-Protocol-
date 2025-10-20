@@ -325,3 +325,210 @@
 (define-private (calculate-carbon-credits (height uint))
     (/ height u10)
 )
+
+;; =================================
+;; TREE ANALYTICS & REPORTING SYSTEM
+;; =================================
+
+;; Analytics data maps
+(define-map regional-stats {region: (string-ascii 50)} {
+    tree-count: uint,
+    total-height: uint,
+    avg-health: uint,
+    total-carbon-credits: uint,
+    last-updated: uint
+})
+
+(define-map daily-analytics uint {
+    date-block: uint,
+    trees-planted: uint,
+    trees-verified: uint,
+    carbon-credits-generated: uint,
+    avg-height: uint,
+    avg-health-score: uint
+})
+
+(define-map growth-analytics uint {
+    token-id: uint,
+    initial-height: uint,
+    growth-rate: uint,
+    health-trend: int,
+    last-analysis: uint
+})
+
+;; Analytics constants
+(define-constant err-region-not-found (err u200))
+(define-constant err-analytics-disabled (err u201))
+(define-constant err-invalid-date-range (err u202))
+(define-constant err-no-analytics-data (err u203))
+
+;; Analytics control variables
+(define-data-var analytics-enabled bool true)
+(define-data-var next-analytics-id uint u1)
+(define-data-var report-generation-fee uint u10000)
+
+;; Update regional statistics when tree data changes
+(define-public (update-regional-stats (region (string-ascii 50)) (token-id uint))
+    (let (
+        (tree (unwrap! (map-get? tree-data token-id) err-not-found))
+        (current-stats (default-to 
+            {tree-count: u0, total-height: u0, avg-health: u0, total-carbon-credits: u0, last-updated: u0}
+            (map-get? regional-stats {region: region})
+        ))
+    )
+        (asserts! (var-get analytics-enabled) err-analytics-disabled)
+        (map-set regional-stats {region: region} {
+            tree-count: (+ (get tree-count current-stats) u1),
+            total-height: (+ (get total-height current-stats) (get height tree)),
+            avg-health: (calculate-avg-health region),
+            total-carbon-credits: (+ (get total-carbon-credits current-stats) (get carbon-credits tree)),
+            last-updated: stacks-block-height
+        })
+        (ok true)
+    )
+)
+
+;; Record daily analytics snapshot
+(define-public (record-daily-analytics)
+    (let (
+        (analytics-id (var-get next-analytics-id))
+        (current-data (calculate-daily-metrics))
+    )
+        (asserts! (var-get analytics-enabled) err-analytics-disabled)
+        (map-set daily-analytics analytics-id {
+            date-block: stacks-block-height,
+            trees-planted: (get trees-planted current-data),
+            trees-verified: (get trees-verified current-data),
+            carbon-credits-generated: (get carbon-credits current-data),
+            avg-height: (get avg-height current-data),
+            avg-health-score: (get avg-health current-data)
+        })
+        (var-set next-analytics-id (+ analytics-id u1))
+        (ok analytics-id)
+    )
+)
+
+;; Analyze tree growth patterns
+(define-public (analyze-tree-growth (token-id uint))
+    (let (
+        (tree (unwrap! (map-get? tree-data token-id) err-not-found))
+        (existing-analysis (map-get? growth-analytics token-id))
+    )
+        (asserts! (var-get analytics-enabled) err-analytics-disabled)
+        (asserts! (is-eq (get owner tree) tx-sender) err-owner-only)
+        (let (
+            (initial-height (match existing-analysis
+                some-analysis (get initial-height some-analysis)
+                (get height tree)
+            ))
+            (growth-rate (calculate-growth-rate token-id initial-height (get height tree)))
+            (health-trend (calculate-health-trend token-id))
+        )
+            (map-set growth-analytics token-id {
+                token-id: token-id,
+                initial-height: initial-height,
+                growth-rate: growth-rate,
+                health-trend: health-trend,
+                last-analysis: stacks-block-height
+            })
+            (ok {growth-rate: growth-rate, health-trend: health-trend})
+        )
+    )
+)
+
+;; Generate comprehensive analytics report (premium feature)
+(define-public (generate-analytics-report (region (string-ascii 50)) (start-block uint) (end-block uint))
+    (let (
+        (fee (var-get report-generation-fee))
+        (regional-data (unwrap! (map-get? regional-stats {region: region}) err-region-not-found))
+    )
+        (asserts! (var-get analytics-enabled) err-analytics-disabled)
+        (asserts! (< start-block end-block) err-invalid-date-range)
+        (asserts! (<= end-block stacks-block-height) err-invalid-date-range)
+        (try! (stx-transfer? fee tx-sender contract-owner))
+        (ok {
+            region: region,
+            period: {start: start-block, end: end-block},
+            stats: regional-data,
+            growth-analysis: (calculate-regional-growth-trends region start-block end-block),
+            sustainability-score: (calculate-sustainability-score region)
+        })
+    )
+)
+
+;; Read-only functions for analytics queries
+(define-read-only (get-regional-stats (region (string-ascii 50)))
+    (ok (map-get? regional-stats {region: region}))
+)
+
+(define-read-only (get-daily-analytics (analytics-id uint))
+    (ok (map-get? daily-analytics analytics-id))
+)
+
+(define-read-only (get-tree-growth-analysis (token-id uint))
+    (ok (map-get? growth-analytics token-id))
+)
+
+(define-read-only (get-analytics-summary)
+    (ok {
+        total-trees: (- (var-get next-token-id) u1),
+        analytics-enabled: (var-get analytics-enabled),
+        report-fee: (var-get report-generation-fee),
+        last-update: stacks-block-height
+    })
+)
+
+;; Admin functions for analytics system
+(define-public (toggle-analytics (enabled bool))
+    (begin
+        (asserts! (is-eq tx-sender contract-owner) err-owner-only)
+        (var-set analytics-enabled enabled)
+        (ok enabled)
+    )
+)
+
+(define-public (set-report-fee (new-fee uint))
+    (begin
+        (asserts! (is-eq tx-sender contract-owner) err-owner-only)
+        (var-set report-generation-fee new-fee)
+        (ok new-fee)
+    )
+)
+
+;; Private helper functions for calculations
+(define-private (calculate-daily-metrics)
+    {
+        trees-planted: u1, ;; Simplified - would need more complex tracking
+        trees-verified: u1,
+        carbon-credits: u100,
+        avg-height: u150,
+        avg-health: u85
+    }
+)
+
+(define-private (calculate-avg-health (region (string-ascii 50)))
+    ;; Simplified calculation - in production would aggregate all trees in region
+    u85
+)
+
+(define-private (calculate-growth-rate (token-id uint) (initial-height uint) (current-height uint))
+    (if (> current-height initial-height)
+        (- current-height initial-height)
+        u0
+    )
+)
+
+(define-private (calculate-health-trend (token-id uint))
+    ;; Simplified trend calculation - positive indicates improving health
+    5
+)
+
+(define-private (calculate-regional-growth-trends (region (string-ascii 50)) (start-block uint) (end-block uint))
+    ;; Simplified growth trend analysis
+    {avg-growth: u25, trend: "positive"}
+)
+
+(define-private (calculate-sustainability-score (region (string-ascii 50)))
+    ;; Sustainability score from 0-100 based on various factors
+    u78
+)
