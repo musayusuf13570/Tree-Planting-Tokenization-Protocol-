@@ -13,10 +13,12 @@
 (define-constant err-milestone-already-claimed (err u108))
 (define-constant err-milestone-not-reached (err u109))
 (define-constant err-insufficient-reward-pool (err u110))
+(define-constant err-invalid-royalty-bps (err u111))
 
 (define-map tree-data uint 
   {
     owner: principal,
+    creator: principal,
     latitude: int,
     longitude: int,
     planting-date: uint,
@@ -46,6 +48,7 @@
 (define-data-var verification-period uint u144)
 (define-data-var next-order-id uint u1)
 (define-data-var reward-pool uint u0)
+(define-data-var marketplace-royalty-bps uint u250)
 
 (define-map milestone-rewards uint uint)
 
@@ -78,6 +81,7 @@
         (try! (nft-mint? tree-nft token-id tx-sender))
         (map-set tree-data token-id {
             owner: tx-sender,
+            creator: tx-sender,
             latitude: latitude,
             longitude: longitude,
             planting-date: stacks-block-height,
@@ -193,9 +197,17 @@
         (tree (unwrap! (map-get? tree-data token-id) err-not-found))
         (price (get price listing))
         (seller (get seller listing))
+        (creator (get creator tree))
+        (royalty-bps (var-get marketplace-royalty-bps))
+        (royalty (/ (* price royalty-bps) u10000))
+        (seller-amount (- price royalty))
     )
         (asserts! (get listed listing) err-not-for-sale)
-        (try! (stx-transfer? price tx-sender seller))
+        (if (> royalty u0)
+            (try! (stx-transfer? royalty tx-sender creator))
+            true
+        )
+        (try! (stx-transfer? seller-amount tx-sender seller))
         (try! (nft-transfer? tree-nft token-id seller tx-sender))
         (map-set tree-data token-id (merge tree {owner: tx-sender}))
         (map-delete marketplace-listings token-id)
@@ -493,6 +505,19 @@
         (var-set report-generation-fee new-fee)
         (ok new-fee)
     )
+)
+
+(define-public (set-marketplace-royalty-bps (new-bps uint))
+    (begin
+        (asserts! (is-eq tx-sender contract-owner) err-owner-only)
+        (asserts! (<= new-bps u10000) err-invalid-royalty-bps)
+        (var-set marketplace-royalty-bps new-bps)
+        (ok new-bps)
+    )
+)
+
+(define-read-only (get-marketplace-royalty-bps)
+    (ok (var-get marketplace-royalty-bps))
 )
 
 ;; Private helper functions for calculations
